@@ -1,0 +1,188 @@
+<!--
+ *
+ * Copyright (c) 2015, Stefan Petscharnig, Maximilian Krumpholz. 
+ * All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 3 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+ * MA 02110-1301 USA
+-->
+
+
+<html>
+	<head>
+		<title></title>
+		<!-- center (the video player) vertically TODO: stylesheet--> 
+		<style type="text/css">
+			.middle { vertical-align:middle; }
+		</style>
+		<!-- bdashplayer style TODO: get sources and style  -->
+	
+		<link rel="stylesheet" type="text/css" href="lib/3rdparty/bitdashplayer.min.css">
+	
+		<link rel="stylesheet" href="https://code.jquery.com/ui/1.11.2/themes/smoothness/jquery-ui.css">
+		<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+		<!-- external scripts -->
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+		<script src="lib/3rdparty/fingerprint.js"></script>
+		<script src="lib/3rdparty/bitdash.min.js"></script>
+		<script src="lib/3rdparty/shaka-player.compiled.js"></script>
+		<script src="lib/3rdparty/dash.min.js"></script>
+		<script src="lib/3rdparty/dijon.js"></script>	
+		<script src="lib/3rdparty/Math.js"></script>	
+		<script src="lib/3rdparty/base64.js"></script>	
+		<script src="lib/3rdparty/long.js"></script>	
+		<script src="lib/3rdparty/objectiron.js"></script>	
+		<script src="lib/3rdparty/xml2json.js"></script>	
+
+		<!-- internal scripts -->
+			<script src="lib/datastruct.js"></script>
+			<script src="lib/util.js"></script>		
+			<script src="lib/shaka.js"></script>		
+			<script src="lib/dashif.js"></script>	
+			<script src="lib/bdplayer.js"></script>	
+	</head>
+
+		<!-- TODO: style in stylesheet-->
+	<body bgcolor="#C0C0C0" >
+
+		<table border="0" width="100%" height="100%">
+			<tr>
+				<td align="center">
+					<div id="player">
+						<video id="video" width="640"> Your browser does not support HTML5 video </video>
+					</div> 
+				</td>
+			</tr>
+		</table>
+
+		<!-- the mertics to be stored -->
+		<form name="data" action="rateqoe.php" method="post">
+			<input type="hidden" name="buffer" />
+			<input type="hidden" name="fingerprint" />
+			<input type="hidden" name="bfchange" />
+			<input type="hidden" name="fullscreen" />
+			<input type="hidden" name="pauses" />
+			<input type="hidden" name="stalls" />
+			<input type="hidden" name="guessedBw" />
+			<input type="hidden" name="representationBitrate" />
+			<input type="hidden" name="startupTime" />
+			<input type="hidden" name="playerType" />
+			<input type="hidden" name="videoTimes" />
+			<input name="estvidbw"/>
+		</form>	
+
+		<script>	
+
+		
+		var paused = false;		
+		var pausedTime = 0;
+		var stalled = false;		
+		var stalledTime = 0;
+
+		var playbackEnd  = 120; /* play until 30 seconds of video playback */
+
+
+		window.onfocus = function(){	
+			metrics.incBFChange();
+		}
+		window.onblur = function(){			
+			metrics.incBFChange();
+		}
+
+		/* disable context menu (right mouse click) */ 
+		document.oncontextmenu = document.body.oncontextmenu = function() {return false;}
+
+		/* called when the media has ended */
+		function mediaEnded(){
+
+			console.log("ENDED");
+
+			/* fill in the form */
+			
+			document.data.fullscreen.value = metrics.getFullscreen(); 	//check
+			document.data.playerType.value = metrics.getPlayerType(); 	//check
+			document.data.bfchange.value = metrics.getBFChange() ; 		//check
+			document.data.fingerprint.value = metrics.getFingerprint();	//check		
+
+			// check for shaka & dashif
+			document.data.buffer.value =  genCSV(metrics.getBufferLevels(), ";");	
+			// check for shaka & dashif
+			document.data.guessedBw.value =  genCSV(metrics.getGuessedBw(), ";");	
+			// check for shaka & dashif
+			document.data.representationBitrate.value =  genCSV(metrics.getRepresentationBw(), ";");	
+			// check for shaka & dashif
+			document.data.videoTimes = genCSV(metrics.getVideoTime(), ";");
+			// check for shaka & dashif
+			document.data.startupTime.value = metrics.getStartupTime(); 	
+			// check for shaka & dashif
+			document.data.pauses.value = genCSV(metrics.getPauses(), ";");
+			// check for shaka & dashif
+			document.data.stalls.value = genCSV(metrics.getStalls(), ";"); 				
+
+			/* submit the form */
+			document.data.submit();
+
+
+		}
+
+		function initialize(){			
+
+			metrics.startupTimeBegin = Date.now();
+			metrics.setFullscreen(isFullscreen());			
+			metrics.setFingerprint(new Fingerprint().get());
+
+			var _sem = gup("sem");
+			if( _sem == "dash1") metrics.setPlayerType(bdplayerId);
+			if( _sem == "dash2") metrics.setPlayerType(dashifplayerId);
+			if( _sem == "dash3") metrics.setPlayerType(shakaplayerId);
+
+			var _video = gup("video");
+			var _study_name = gup("study");
+			videoURL = _video;
+			window.history.pushState("DASH Study", "Title", _study_name);
+
+			var mpdPath = "https://bitmovin-a.akamaihd.net/content/eval/2secs/bbb.mpd";
+
+			/* let us setup the player */
+			switch(metrics.getPlayerType()){
+				case bdplayerId:	
+					console.log("setting up bitdash player...");
+					setupBDPlayer(mpdPath);
+				break;
+
+				case dashifplayerId:
+					console.log("setting up dashif player...");
+					setupDAHIFPlayer(mpdPath);
+				break;
+
+				case shakaplayerId:					 
+					console.log("setting up shaka player...");
+					setupShakaPlayer(mpdPath);	
+				break;	
+
+			}				   
+		}
+
+    
+		/********/
+		/* init */
+		/********/
+
+		initialize();
+
+		</script>
+
+	</body>
+</html> 
